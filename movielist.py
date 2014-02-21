@@ -7,6 +7,8 @@ import locale
 import sys
 import csv
 import itertools
+import unittest
+import re
 
 # Ideen:
 # - in Dateinamen das Jahr ergänzen, das in der XML-Datei steht.
@@ -15,6 +17,13 @@ import itertools
 #   vergleiche um zu prüfen, welche Filme mir noch fehlen, möchte ich Filme
 #   ausschließen, die ich schon mal gelöscht habe, weil sie mir nicht gefallen
 # - Vergleich zweier Listen implementieren, alternative ist Diff-Programm
+
+class MyTests(unittest.TestCase):
+    def test_stringToMovie_WithValidString_ReturnsMovie(self):
+        string = "Inception (2012)"
+        movie = stringToMovie(string)
+        self.assertEqual(movie.Title, "Inception")
+        self.assertEqual(movie.Year, "2012")
 
 def main():
     args = parseargs()
@@ -27,10 +36,43 @@ def main():
     movies1 = parsexml(args.xmlfilename1)
     movies2 = parsexml(args.xmlfilename2)
 
-    difflist = comparemovies(movies1, movies2)
+    excludelist = None
+    if(args.excludelist != None):
+        excludelist = readexcludelist(args.excludelist)
+        # alle Filme auf der Ausschlussliste nicht berücksichtigen
+
+    difflist = comparemovies(movies1, movies2, excludelist)
     exportdifflist(difflist)
 
     #exportmovielist(movies, outfilename)
+
+def readexcludelist(filename):
+    movielist = []
+    with codecs.open(filename, "r", encoding="UTF-8") as infile:
+        for line in infile:
+            movie = stringToMovie(line)
+            movielist.append(movie)
+
+    return movielist
+
+def stringToMovie(line):
+    """Extrahiert aus einer Zeichenkette im Format Filmtitel (Jahr) den Titel und
+das Jahr und gibt ein entsprechendes Objekt vom Typ Movie zurück."""
+    # zuerst nach Jahr in Klammern suchen
+    yearPattern = re.compile("\(\d{4,4}\)")
+    yearMatch = yearPattern.search(line)
+    year = None
+    if(yearMatch != None):
+        year = yearMatch.group()[1:-1] # Klammern entfernen
+        # das Jahr inkl. Klammern entfernen
+        line = re.sub(yearPattern, "", line)
+
+    # Filmtitel extrahieren, Leerzeichen entfernen
+    title = line.strip()
+    movie = Movie()
+    movie.Title = title
+    movie.Year = year
+    return movie
 
 def exportdifflist(difflist):
     # bevor itertools.groupby angewendet wird, muss die Liste sortiert werden,
@@ -44,11 +86,16 @@ def exportdifflist(difflist):
                 outfile.write("  %s (%s)\n" % (entry.movie.Title, entry.movie.Year))
 
 
-def comparemovies(movies1, movies2):
-    # Welche Filme sind in der einen Liste enthalten, aber nicht in der anderen?
-    # d.h.: welche Filme kann man tauschen?
+def comparemovies(movies1, movies2, excludelist=None):
     results = []
+
     for movie in movies2:
+        # steht Film in Ausschlussliste
+        foundmovie = findMovieWithTitleAndYear(movie, excludelist)
+        if(len(foundmovie) > 0):
+            print("Lasse film aus: " + movie.Title)
+            continue
+
         # habe ich den Film schon?
         findresult = findmovie(movie, movies1)
         if(findresult != None):
@@ -56,9 +103,12 @@ def comparemovies(movies1, movies2):
 
     return results
 
-def findmovie(movie, movielist):
+def findMovieWithTitleAndYear(movie, movielist):
     foundmovies = list(filter(lambda m: (movie.Title == m.Title) and (movie.Year == m.Year), movielist))
+    return foundmovies
 
+def findmovie(movie, movielist):
+    foundmovies = findMovieWithTitleAndYear(movie, movielist)
     if(len(foundmovies) == 0):
         # Film wurde in der Liste nicht gefunden, er fehlt also in meiner Sammlung
         return FindResult("NEW", movie)
@@ -72,8 +122,6 @@ def findmovie(movie, movielist):
     else:
         print("Film ist in Sammlung doppelt vorhanden: %s" % movie)
         return FindResult("DUPLICATE", movie)
-
-
 
 class FindResult:
     def __init__(self, difftype, movie):
@@ -164,8 +212,9 @@ class Movie:
 
 def parseargs():
     parser = argparse.ArgumentParser("Export-Skript für XBMC-Bibliothek")
-    parser.add_argument("-x1", "--xmlfile1", help="erste Filmliste im XML-Format", dest="xmlfilename1")
-    parser.add_argument("-x2", "--xmlfile2", help="zweite Filmliste im XML-Format", dest="xmlfilename2")
+    parser.add_argument("-x1", "--xmlfile1", help="erste Filmliste im XML-Format", dest="xmlfilename1", required=True)
+    parser.add_argument("-x2", "--xmlfile2", help="zweite Filmliste im XML-Format", dest="xmlfilename2", required=True)
+    parser.add_argument("-e", "--excludelist", help="Liste mit auszuschliessenden Filmtiteln", dest="excludelist")
     args = parser.parse_args()
     return args
 
@@ -173,3 +222,5 @@ def parseargs():
 if __name__ == '__main__':
     #sys.stdout = codecs.getwriter(locale.getpreferredencoding())(sys.stdout)
     main()
+    #unittest.main()
+
