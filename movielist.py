@@ -9,6 +9,7 @@ import csv
 import itertools
 import unittest
 import re
+import pdb
 
 # Ideen:
 # - in Dateinamen das Jahr ergänzen, das in der XML-Datei steht.
@@ -26,25 +27,97 @@ class MyTests(unittest.TestCase):
         self.assertEqual(movie.Year, "2012")
 
 def main():
-    args = parseargs()
+    parser = argparse.ArgumentParser("Export-Skript für XBMC-Bibliothek")
+    subparsers = parser.add_subparsers(help="sub-command help")
 
-    #outfilename = getoutfilename(args.xmlfilename)
-    #if(os.path.exists(outfilename)):
-    #    print("Ausgabedatei existiert bereits und wird nicht ueberschrieben. Bitte Eingabedatei anders benennen.")
-    #    sys.exit(1)
+    parser_compare = subparsers.add_parser("compare", help="Zwei aus XMBC exportierte XML-Dateien vergleichen")
+    parser_compare.add_argument("-x1", "--xmlfile1", help="erste Filmliste im XML-Format", required=True)
+    parser_compare.add_argument("-x2", "--xmlfile2", help="zweite Filmliste im XML-Format", required=True)
+    parser_compare.add_argument("-e", "--excludelist", help="Liste mit auszuschliessenden Filmtiteln", dest="excludelist")
+    parser_compare.set_defaults(func=compareXmlMovieLists)
 
+    parser_rename = subparsers.add_parser("rename", help="Filmdateien anhand einer aus XMBC exportierten XML-Datei umbenennen.")
+    parser_rename.add_argument("-x", "--xmlfile", help="Aus XBMC exportierte Filmliste (XML)", required=True)
+    parser_rename.add_argument("-b", "--basepath", help="Das Verzeichnis, in dem die Filmdateien zu finden sind.", required=True)
+    parser_rename.set_defaults(func=renameMovieFiles)
+    args = parser.parse_args()
+    args.func(args)
+
+
+def compareXmlMovieLists(args):
     movies1 = parsexml(args.xmlfilename1)
     movies2 = parsexml(args.xmlfilename2)
 
-    excludelist = None
+    excludelist = []
     if(args.excludelist != None):
-        excludelist = readexcludelist(args.excludelist)
         # alle Filme auf der Ausschlussliste nicht berücksichtigen
+        excludelist = readexcludelist(args.excludelist)
+
 
     difflist = comparemovies(movies1, movies2, excludelist)
     exportdifflist(difflist)
 
     #exportmovielist(movies, outfilename)
+
+def renameMovieFiles(args):
+    if(not os.path.exists(args.basepath)):
+        print("Das Basisverzeichnis existiert nicht: %s" % args.basepath)
+        sys.exit(1)
+
+
+    movielist = parsexml(args.xmlfile)
+    for movie in movielist:
+        # prüfe ob Datei im Zielpfad überhaupt existiert. Hierzu muss man den
+        # Dateinamen des Films im angegebenen Basispfad suchen, denn XMBC greift
+        # in den meisten Fällen über einen ganz anderen Pfad (bspw. eine Netzwerkfreigabe)
+        # auf die Filmdateien zu als dieses Skript.
+
+        path, filenameWithExtension = os.path.split(movie.FilePath)
+        filename, extension = os.path.splitext(filenameWithExtension)
+
+        movieLocalPath = os.path.join(args.basepath, filenameWithExtension)
+        if(not os.path.exists(movieLocalPath)):
+            print("Filmdatei existiert nicht: " + movieLocalPath)
+            continue
+
+        # enthält Dateiname die Jahreszahl des Films in runden Klammern?
+        # Beispiel: "Shutter Island (2010).mkv"
+        movieFromFilename = stringToMovie(filename)
+
+        # Jahr im Dateinamen anders als in Filmdatenbank
+        if(movieFromFilename.Year != movie.Year):
+            newFilename = "%s (%s)%s" % (filename, movie.Year, extension)
+            newFilePath = os.path.join(args.basepath, newFilename)
+            question = "Soll die Datei \n\t%s\nin\t%s\n umbenannt werden?" % \
+                (movie.Filename, newFilePath)
+            answer = query_yes_no_cancel(question)
+            if(answer == True):
+                try:
+                    os.rename(movieLocalPath, newFilePath)
+                except OSError as err:
+                    "Konnte Datei nicht umbenennen. Fehlermeldung: " + err
+
+
+def query_yes_no_cancel(question):
+    valid = {"yes":True,
+             "y":True,
+             "j":True,
+             "no":False,
+             "nein":False,
+             "n":False,
+             "c":None,
+             "cancel":None,
+             }
+    prompt = "y/j/n/c (yes/ja/no/nein/cancel/)"
+
+    while True:
+        sys.stdout.write(question + prompt)
+        choice = input().lower()
+        if choice in valid:
+            return valid[choice]
+        else:
+            sys.stdout.write("Ungueltige Eingabe.")
+
 
 def readexcludelist(filename):
     movielist = []
@@ -69,6 +142,9 @@ das Jahr und gibt ein entsprechendes Objekt vom Typ Movie zurück."""
 
     # Filmtitel extrahieren, Leerzeichen entfernen
     title = line.strip()
+    if(title == "" and year == None):
+        return None
+
     movie = Movie()
     movie.Title = title
     movie.Year = year
@@ -86,7 +162,7 @@ def exportdifflist(difflist):
                 outfile.write("  %s (%s)\n" % (entry.movie.Title, entry.movie.Year))
 
 
-def comparemovies(movies1, movies2, excludelist=None):
+def comparemovies(movies1, movies2, excludelist=[]):
     results = []
 
     for movie in movies2:
@@ -103,7 +179,7 @@ def comparemovies(movies1, movies2, excludelist=None):
 
     return results
 
-def findMovieWithTitleAndYear(movie, movielist):
+def findMovieWithTitleAndYear(movie, movielist = []):
     foundmovies = list(filter(lambda m: (movie.Title == m.Title) and (movie.Year == m.Year), movielist))
     return foundmovies
 
@@ -170,6 +246,7 @@ def parsexml(xmlfile):
 
         filename = os.path.basename(moviexml.find("filenameandpath").text)
         movie.Filename = filename
+        movie.FilePath = moviexml.find("filenameandpath").text
 
         try:
             video = moviexml.find("fileinfo").find("streamdetails").find("video")
@@ -192,6 +269,7 @@ class Movie:
         self.OriginalTitle = ""
         self.Year = ""
         self.Filename = ""
+        self.FilePath = ""
         self.ResolutionWidth = 0
         self.ResolutionHeight = 0
 
@@ -208,16 +286,6 @@ class Movie:
             return "HD"
         #return "%sx%s" % (self.ResolutionWidth, self.ResolutionHeight)
         return "SD"
-
-
-def parseargs():
-    parser = argparse.ArgumentParser("Export-Skript für XBMC-Bibliothek")
-    parser.add_argument("-x1", "--xmlfile1", help="erste Filmliste im XML-Format", dest="xmlfilename1", required=True)
-    parser.add_argument("-x2", "--xmlfile2", help="zweite Filmliste im XML-Format", dest="xmlfilename2", required=True)
-    parser.add_argument("-e", "--excludelist", help="Liste mit auszuschliessenden Filmtiteln", dest="excludelist")
-    args = parser.parse_args()
-    return args
-
 
 if __name__ == '__main__':
     #sys.stdout = codecs.getwriter(locale.getpreferredencoding())(sys.stdout)
