@@ -1,23 +1,15 @@
 # -*- encoding: utf-8 -*-
 import argparse
-import xml.etree.ElementTree as ET
 import codecs
-import os
-import locale
-import sys
 import csv
 import itertools
-import unittest
-import re
+import locale
+import os
 import pdb
-
-# Ideen:
-# - in Dateinamen das Jahr ergänzen, das in der XML-Datei steht.
-#   Dabei sollte Nutzer entscheiden, ob die jeweilige Datei umbenannt wird
-# - Ausschlussliste aus Datei laden: wenn ich meine Liste mit einer anderen
-#   vergleiche um zu prüfen, welche Filme mir noch fehlen, möchte ich Filme
-#   ausschließen, die ich schon mal gelöscht habe, weil sie mir nicht gefallen
-# - Vergleich zweier Listen implementieren, alternative ist Diff-Programm
+import re
+import sys
+import unittest
+import xml.etree.ElementTree as ET
 
 class MyTests(unittest.TestCase):
     def test_stringToMovie_WithValidString_ReturnsMovie(self):
@@ -25,6 +17,11 @@ class MyTests(unittest.TestCase):
         movie = stringToMovie(string)
         self.assertEqual(movie.Title, "Inception")
         self.assertEqual(movie.Year, "2012")
+
+        string = "127 Hours (2010)"
+        movie = stringToMovie(string)
+        self.assertEqual(movie.Title, "127 Hours")
+        self.assertEqual(movie.Year, "2010")
 
 def main():
     parser = argparse.ArgumentParser("Export-Skript für XBMC-Bibliothek")
@@ -43,15 +40,18 @@ def main():
     args = parser.parse_args()
     args.func(args)
 
-
 def compareXmlMovieLists(args):
-    movies1 = parsexml(args.xmlfilename1)
-    movies2 = parsexml(args.xmlfilename2)
+    movies1 = parsexml(args.xmlfile1)
+    movies2 = parsexml(args.xmlfile2)
 
     excludelist = []
     if(args.excludelist != None):
         # alle Filme auf der Ausschlussliste nicht berücksichtigen
-        excludelist = readexcludelist(args.excludelist)
+        try:
+            excludelist = readexcludelist(args.excludelist)
+        except UnicodeDecodeError as exc:
+            printc("Konnte Dateiinhalt nicht dekodieren, Datei muss UTF8-Kodierung verwenden:" + args.excludelist)
+            sys.exit(1)
 
 
     difflist = comparemovies(movies1, movies2, excludelist)
@@ -61,7 +61,7 @@ def compareXmlMovieLists(args):
 
 def renameMovieFiles(args):
     if(not os.path.exists(args.basepath)):
-        print("Das Basisverzeichnis existiert nicht: %s" % args.basepath)
+        printc("Das Basisverzeichnis existiert nicht: %s" % args.basepath)
         sys.exit(1)
 
 
@@ -77,7 +77,7 @@ def renameMovieFiles(args):
 
         movieLocalPath = os.path.join(args.basepath, filenameWithExtension)
         if(not os.path.exists(movieLocalPath)):
-            print("Filmdatei existiert nicht: " + movieLocalPath)
+            printc("Filmdatei existiert nicht: " + movieLocalPath)
             continue
 
         # enthält Dateiname die Jahreszahl des Films in runden Klammern?
@@ -159,7 +159,7 @@ def exportdifflist(difflist):
         for group, movielist in itertools.groupby(difflist, lambda x: x.difftype):
             outfile.write("%s\n" % group)
             for entry in sorted(movielist, key = lambda x: x.movie.Title):
-                outfile.write("  %s (%s)\n" % (entry.movie.Title, entry.movie.Year))
+                outfile.write("  %s\n" % (entry.movie.Filename))
 
 
 def comparemovies(movies1, movies2, excludelist=[]):
@@ -169,7 +169,7 @@ def comparemovies(movies1, movies2, excludelist=[]):
         # steht Film in Ausschlussliste
         foundmovie = findMovieWithTitleAndYear(movie, excludelist)
         if(len(foundmovie) > 0):
-            print("Lasse film aus: " + movie.Title)
+            printc("Lasse film aus: " + movie.Title)
             continue
 
         # habe ich den Film schon?
@@ -196,7 +196,7 @@ def findmovie(movie, movielist):
             (newmovie.ResolutionWidth * newmovie.ResolutionHeight)):
                 return FindResult("RESOLUTION", movie)
     else:
-        print("Film ist in Sammlung doppelt vorhanden: %s" % movie)
+        printc("Film ist in Sammlung doppelt vorhanden: %s" % movie)
         return FindResult("DUPLICATE", movie)
 
 class FindResult:
@@ -225,7 +225,7 @@ def parsexml(xmlfile):
     try:
         xml = ET.parse(xmlfile)
     except IOError:
-        print("Eingabedatei konnte nicht geöffnet werden.")
+        printc("Eingabedatei konnte nicht geöffnet werden.")
         sys.exit(1)
 
     movies = []
@@ -235,7 +235,7 @@ def parsexml(xmlfile):
         origtitle = moviexml.find("originaltitle")
         if(origtitle == None):
             sorttitle = moviexml.find("sorttitle")
-            print("Kein <originaltitle> vorhanden, verwende <sorttitle>: %s" % sorttitle.text)
+            printc("Kein <originaltitle> vorhanden, verwende <sorttitle>: %s" % sorttitle.text)
 
             #print(ET.tostring(moviexml))
         else:
@@ -262,6 +262,11 @@ def parsexml(xmlfile):
 
 
     return movies
+
+def printc(astring):
+    print(astring.encode(sys.stdout.encoding, errors="replace"))
+    #print(astring)
+
 
 class Movie:
     def __init__(self):
@@ -290,5 +295,8 @@ class Movie:
 if __name__ == '__main__':
     #sys.stdout = codecs.getwriter(locale.getpreferredencoding())(sys.stdout)
     main()
-    #unittest.main()
+
+    #suite = unittest.TestLoader().loadTestsFromTestCase(MyTests)
+    #unittest.TextTestRunner(verbosity=2).run(suite)
+    
 
